@@ -97,13 +97,7 @@ impl Div<f32> for Vec2 {
 struct Pod {
     pos: Vec2,
     pos_1: Vec2,
-    pos_2: Vec2,
     orientation: Vec2,
-    orientation_1: Vec2,
-    orientation_2: Vec2,
-    los: Vec2,
-    los_1: Vec2,
-    los_2: Vec2,
 }
 
 impl Pod {
@@ -123,13 +117,7 @@ impl Pod {
         Self {
             pos,
             pos_1: self.pos,
-            pos_2: self.pos_1,
             orientation,
-            orientation_1: self.orientation,
-            orientation_2: self.orientation_1,
-            los: checkpoint - pos,
-            los_1: self.los,
-            los_2: self.los_1,
         }
     }
 
