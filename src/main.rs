@@ -4,6 +4,8 @@ use std::{
     ops::{Add, Div, Mul, Neg, Sub},
 };
 
+const MAX_THRUST: f32 = 100.0;
+
 macro_rules! parse_input {
     ($x:expr, $t:ident) => {
         $x.trim().parse::<$t>().unwrap()
@@ -136,14 +138,14 @@ impl Pod {
         let rel_vel = -(self.pos - self.pos_1);
         let rotation_vec = range.outer_product(rel_vel) / range.inner_product(range);
         let acc_norm = Vec2::new(rel_vel.y * rotation_vec, -rel_vel.x * rotation_vec);
-        let steer_vec = if acc_norm.norm() < 100.0 {
-            range.normalized() * (100.0f32.powi(2) - acc_norm.inner_product(acc_norm)).sqrt()
+        let steer_vec = if acc_norm.norm() < MAX_THRUST {
+            range.normalized() * (MAX_THRUST.powi(2) - acc_norm.inner_product(acc_norm)).sqrt()
                 + acc_norm
         } else {
-            acc_norm.normalized() * 100.0
+            acc_norm.normalized() * MAX_THRUST
         };
         let mut thrust =
-            (self.orientation.inner_product(range.normalized()).max(0.0) * 5.0).tanh() * 100.0;
+            (self.orientation.inner_product(range.normalized()).max(0.0) * 5.0).tanh() * MAX_THRUST;
         let expected_time = range.norm() / rel_vel.norm();
         if expected_time < 4.0 {
             thrust /= expected_time.max(1.0);
@@ -158,38 +160,31 @@ fn main() {
     let inputs = input_line.split(" ").collect::<Vec<_>>();
     let x = parse_input!(inputs[0], f32);
     let y = parse_input!(inputs[1], f32);
-    let checkpoint_x = parse_input!(inputs[2], f32); // x position of the next check point
-    let checkpoint_y = parse_input!(inputs[3], f32); // y position of the next check point
-                                                     // let next_checkpoint_dist = parse_input!(inputs[4], f32); // distance to the next checkpoint
-    let checkpoint_angle = parse_input!(inputs[5], f32); // angle between your pod orientation and the direction of the next checkpoint
+    let checkpoint_x = parse_input!(inputs[2], f32);
+    let checkpoint_y = parse_input!(inputs[3], f32);
+    let checkpoint_angle = parse_input!(inputs[5], f32);
     let mut input_line = String::new();
     io::stdin().read_line(&mut input_line).unwrap();
-    // let inputs = input_line.split(" ").collect::<Vec<_>>();
-    // let opponent_x = parse_input!(inputs[0], i32);
-    // let opponent_y = parse_input!(inputs[1], i32);
+
     let mut pod = Pod::default();
     pod = pod.update(x, y, checkpoint_x, checkpoint_y, checkpoint_angle);
     println!("{:.0} {:.0} BOOST", checkpoint_x, checkpoint_y);
+
     loop {
         let mut input_line = String::new();
         io::stdin().read_line(&mut input_line).unwrap();
         let inputs = input_line.split(" ").collect::<Vec<_>>();
         let x = parse_input!(inputs[0], f32);
         let y = parse_input!(inputs[1], f32);
-        let checkpoint_x = parse_input!(inputs[2], f32); // x position of the next check point
-        let checkpoint_y = parse_input!(inputs[3], f32); // y position of the next check point
-                                                         // let next_checkpoint_dist = parse_input!(inputs[4], f32); // distance to the next checkpoint
-        let checkpoint_angle = parse_input!(inputs[5], f32); // angle between your pod orientation and the direction of the next checkpoint
+        let checkpoint_x = parse_input!(inputs[2], f32);
+        let checkpoint_y = parse_input!(inputs[3], f32);
+        let checkpoint_angle = parse_input!(inputs[5], f32);
         let mut input_line = String::new();
         io::stdin().read_line(&mut input_line).unwrap();
-        // let inputs = input_line.split(" ").collect::<Vec<_>>();
-        // let opponent_x = parse_input!(inputs[0], i32);
-        // let opponent_y = parse_input!(inputs[1], i32);
 
         pod = pod.update(x, y, checkpoint_x, checkpoint_y, checkpoint_angle);
         let target = Vec2::new(checkpoint_x, checkpoint_y);
         let (steer_vec, thrust) = pod.pro_nav(target);
-        // The ten multiplication is just for visuals, it doesn't matter to the navigation
         let point_to = pod.pos + steer_vec;
         println!(
             "{:.0} {:.0} {:.0}",
