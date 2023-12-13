@@ -153,7 +153,10 @@ impl Pod {
 
     fn navigate(&self, target: Target, checkpoints: &[Vec2], opponents: &[Pod]) -> (Vec2, Action) {
         let actual_target = match target {
-            Target::Checkpoint(cp) => cp - (cp - self.pos).normalized() * POD_RADIUS,
+            Target::Checkpoint(cp) => {
+                let next_cp = checkpoints[(self.checkpoint_idx + 1) % checkpoints.len()];
+                cp + (next_cp - cp).normalized() * (POD_RADIUS / 2.0)
+            }
             Target::Pod(pod) => {
                 if (pod.pos - self.pos)
                     .normalized()
