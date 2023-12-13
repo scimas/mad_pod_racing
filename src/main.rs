@@ -38,6 +38,9 @@ impl Vec2 {
         self.rotate(angle / 180.0 * PI)
     }
 
+    // This will always be out-of-plane. The "z" component of the 3D vector.
+    // That's why it is fine to represent it as a signed scalar for the purposes
+    // of this project; at least for now.
     fn outer_product(self, rhs: Self) -> f32 {
         self.x * rhs.y - self.y * rhs.x
     }
@@ -95,19 +98,37 @@ impl Div<f32> for Vec2 {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+struct RaceParameters {
+    checkpoints: Vec<Vec2>,
+    opponents: Vec<Pod>,
+    laps: u8,
+}
+
+impl RaceParameters {
+    fn new(checkpoints: Vec<Vec2>, opponents: Vec<Pod>, laps: u8) -> Self {
+        Self {
+            checkpoints,
+            opponents,
+            laps,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Pod {
     pos: Vec2,
     vel: Vec2,
     orientation: Vec2,
     checkpoint_idx: usize,
     lap: u8,
+    role: Role,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Target {
-    Pod(Pod),
-    Checkpoint(Vec2),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Racer,
+    Attacker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -128,55 +149,84 @@ impl fmt::Display for Action {
 }
 
 impl Pod {
-    fn update(
-        self,
+    fn new(
         x: f32,
         y: f32,
         vx: f32,
         vy: f32,
         orient_angle: f32,
         checkpoint_idx: usize,
+        role: Role,
     ) -> Self {
-        let lap = if checkpoint_idx != self.checkpoint_idx {
-            self.lap + 1
-        } else {
-            self.lap
-        };
         Self {
             pos: Vec2::new(x, y),
             vel: Vec2::new(vx, vy),
             orientation: Vec2::new(1.0, 0.0).rotate_deg(orient_angle),
             checkpoint_idx,
-            lap,
+            lap: 0,
+            role,
         }
     }
 
-    fn navigate(&self, target: Target, checkpoints: &[Vec2], opponents: &[Pod]) -> (Vec2, Action) {
-        let actual_target = match target {
-            Target::Checkpoint(cp) => {
-                let next_cp = checkpoints[(self.checkpoint_idx + 1) % checkpoints.len()];
-                cp + (next_cp - cp).normalized() * (POD_RADIUS / 2.0)
+    fn attacker() -> Self {
+        Self::new(0.0, 0.0, 0.0, 0.0, 0.0, 0, Role::Attacker)
+    }
+
+    fn racer() -> Self {
+        Self::new(0.0, 0.0, 0.0, 0.0, 0.0, 0, Role::Racer)
+    }
+
+    fn update(
+        &mut self,
+        x: f32,
+        y: f32,
+        vx: f32,
+        vy: f32,
+        orient_angle: f32,
+        checkpoint_idx: usize,
+    ) {
+        self.lap = if checkpoint_idx != self.checkpoint_idx {
+            self.lap + 1
+        } else {
+            self.lap
+        };
+        self.pos = Vec2::new(x, y);
+        self.vel = Vec2::new(vx, vy);
+        self.orientation = Vec2::new(1.0, 0.0).rotate_deg(orient_angle);
+        self.checkpoint_idx = checkpoint_idx;
+    }
+
+    fn navigate(&self, parameters: &RaceParameters) -> (Vec2, Action) {
+        let nav_target;
+        let rel_vel;
+        match self.role {
+            Role::Racer => {
+                let current_cp = parameters.checkpoints[self.checkpoint_idx];
+                let next_cp = parameters.checkpoints
+                    [(self.checkpoint_idx + 1) % parameters.checkpoints.len()];
+                nav_target = current_cp + (next_cp - current_cp).normalized() * (POD_RADIUS / 2.0);
+                rel_vel = -self.vel;
             }
-            Target::Pod(pod) => {
+            Role::Attacker => {
+                let pod = prioritize_opponent(parameters);
+                rel_vel = pod.vel - self.vel;
                 if (pod.pos - self.pos)
                     .normalized()
                     .inner_product(self.vel.normalized())
                     > 0.8
                 {
-                    let cp_diff = checkpoints[(pod.checkpoint_idx + 1) % checkpoints.len()]
-                        - checkpoints[pod.checkpoint_idx];
-                    checkpoints[pod.checkpoint_idx] + cp_diff.normalized() * (cp_diff.norm() / 2.0)
+                    let cp_diff = parameters.checkpoints
+                        [(pod.checkpoint_idx + 1) % parameters.checkpoints.len()]
+                        - parameters.checkpoints[pod.checkpoint_idx];
+                    nav_target = parameters.checkpoints[pod.checkpoint_idx]
+                        + cp_diff.normalized() * (cp_diff.norm() / 2.0);
                 } else {
-                    let cp_range = checkpoints[pod.checkpoint_idx] - pod.pos;
-                    pod.pos + pod.vel + cp_range.normalized() * POD_RADIUS
+                    let cp_range = parameters.checkpoints[pod.checkpoint_idx] - pod.pos;
+                    nav_target = pod.pos + pod.vel + cp_range.normalized() * POD_RADIUS;
                 }
             }
         };
-        let mut range = actual_target - self.pos;
-        let rel_vel = match target {
-            Target::Checkpoint(_) => -self.vel,
-            Target::Pod(pod) => pod.vel - self.vel,
-        };
+        let mut range = nav_target - self.pos;
         let rotation_vec = range.outer_product(rel_vel) / range.inner_product(range);
         let acc_norm = Vec2::new(rel_vel.y * rotation_vec, -rel_vel.x * rotation_vec);
         let mut steer_vec = self.pos
@@ -188,12 +238,21 @@ impl Pod {
             };
         let expected_time = range.norm() / self.vel.norm();
         if expected_time < 3.0 {
-            steer_vec = checkpoints[(self.checkpoint_idx + 1) % checkpoints.len()];
-            range = checkpoints[(self.checkpoint_idx + 1) % checkpoints.len()] - self.pos;
+            match self.role {
+                Role::Racer => {
+                    steer_vec = parameters.checkpoints
+                        [(self.checkpoint_idx + 1) % parameters.checkpoints.len()];
+                    range = parameters.checkpoints
+                        [(self.checkpoint_idx + 1) % parameters.checkpoints.len()]
+                        - self.pos;
+                }
+                Role::Attacker => (),
+            }
         }
         let thrust =
             (self.orientation.inner_product(range.normalized()).max(0.0) * 6.0).tanh() * MAX_THRUST;
-        let action = if opponents
+        let action = if parameters
+            .opponents
             .iter()
             .map(|pod| {
                 (
@@ -215,7 +274,7 @@ impl Pod {
 fn main() {
     let mut input_line = String::new();
     io::stdin().read_line(&mut input_line).unwrap();
-    let _laps = parse_input!(input_line, u8);
+    let laps = parse_input!(input_line, u8);
     input_line.clear();
     io::stdin().read_line(&mut input_line).unwrap();
     let checkpoint_n = parse_input!(input_line, usize);
@@ -229,44 +288,43 @@ fn main() {
         checkpoints.push(Vec2::new(x, y));
     }
 
-    let mut racer = Pod::default();
-    racer = update_pod(racer);
+    let mut racer = Pod::racer();
+    update_pod(&mut racer);
 
-    let mut attacker = Pod::default();
-    attacker = update_pod(attacker);
+    let mut attacker = Pod::attacker();
+    update_pod(&mut attacker);
 
-    let mut opponents: Vec<Pod> = (0..OPPONENTS)
+    let opponents: Vec<Pod> = (0..OPPONENTS)
         .map(|_| {
-            let opponent = Pod::default();
-            update_pod(opponent)
+            let mut opponent = Pod::racer();
+            update_pod(&mut opponent);
+            opponent
         })
         .collect();
 
+    let mut parameters = RaceParameters::new(checkpoints, opponents, laps);
     println!(
         "{:.0} {:.0} {}",
-        checkpoints[racer.checkpoint_idx].x,
-        checkpoints[racer.checkpoint_idx].y,
+        parameters.checkpoints[racer.checkpoint_idx].x,
+        parameters.checkpoints[racer.checkpoint_idx].y,
         Action::Boost
     );
     println!(
         "{:.0} {:.0} {}",
-        checkpoints[racer.checkpoint_idx].x,
-        checkpoints[racer.checkpoint_idx].y,
+        parameters.checkpoints[racer.checkpoint_idx].x,
+        parameters.checkpoints[racer.checkpoint_idx].y,
         Action::Thrust(100.0)
     );
     loop {
-        racer = update_pod(racer);
-        attacker = update_pod(attacker);
-        opponents
+        update_pod(&mut racer);
+        update_pod(&mut attacker);
+        parameters
+            .opponents
             .iter_mut()
-            .for_each(|opponent| *opponent = update_pod(*opponent));
+            .for_each(|opponent| update_pod(opponent));
 
-        let target = Target::Checkpoint(checkpoints[racer.checkpoint_idx]);
-        let (racer_steer_vec, racer_action) = racer.navigate(target, &checkpoints, &opponents);
-
-        let target = Target::Pod(*prioritize_opponent(&opponents, &checkpoints));
-        let (attacker_steer_vec, attacker_action) =
-            attacker.navigate(target, &checkpoints, &opponents);
+        let (racer_steer_vec, racer_action) = racer.navigate(&parameters);
+        let (attacker_steer_vec, attacker_action) = attacker.navigate(&parameters);
 
         println!(
             "{:.0} {:.0} {}",
@@ -283,7 +341,7 @@ fn main() {
     }
 }
 
-fn update_pod(pod: Pod) -> Pod {
+fn update_pod(pod: &mut Pod) {
     let mut input_line = String::new();
     io::stdin().read_line(&mut input_line).unwrap();
     let inputs = input_line.split(' ').collect::<Vec<_>>();
@@ -296,21 +354,28 @@ fn update_pod(pod: Pod) -> Pod {
     pod.update(x, y, vx, vy, orient_angle, checkpoint_idx)
 }
 
-fn prioritize_opponent<'a>(opponents: &'a [Pod], checkpoints: &[Vec2]) -> &'a Pod {
-    let max_lap = opponents.iter().map(|pod| pod.lap).max().unwrap();
-    let max_checkpoint = opponents
+fn prioritize_opponent(parameters: &RaceParameters) -> &Pod {
+    let max_lap = parameters
+        .opponents
+        .iter()
+        .map(|pod| pod.lap)
+        .max()
+        .unwrap();
+    let max_checkpoint = parameters
+        .opponents
         .iter()
         .filter(|pod| pod.lap == max_lap)
         .map(|pod| pod.checkpoint_idx)
         .max()
         .unwrap();
-    opponents
+    parameters
+        .opponents
         .iter()
         .filter(|pod| (pod.lap == max_lap) && (pod.checkpoint_idx == max_checkpoint))
         .min_by(|pod1, pod2| {
-            (pod1.pos - checkpoints[max_checkpoint])
+            (pod1.pos - parameters.checkpoints[max_checkpoint])
                 .norm()
-                .partial_cmp(&(pod2.pos - checkpoints[max_checkpoint]).norm())
+                .partial_cmp(&(pod2.pos - parameters.checkpoints[max_checkpoint]).norm())
                 .unwrap()
         })
         .unwrap()
