@@ -7,6 +7,7 @@ use std::{
 const MAX_THRUST: f32 = 100.0;
 const POD_RADIUS: f32 = 400.0;
 const OPPONENTS: usize = 2;
+const FUTURE_TIME: f32 = 3.0;
 
 macro_rules! parse_input {
     ($x:expr, $t:ident) => {
@@ -236,21 +237,24 @@ impl Pod {
             } else {
                 acc_norm.normalized() * MAX_THRUST
             };
-        let expected_time = range.norm() / self.vel.norm();
-        if expected_time < 3.0 {
-            match self.role {
-                Role::Racer => {
+
+        let mut thrust =
+            (self.orientation.inner_product(range.normalized()).powi(4) * 16.0).tanh() * MAX_THRUST;
+        match self.role {
+            Role::Racer => {
+                if (nav_target - self.pos).norm() / self.vel.norm() < FUTURE_TIME {
                     steer_vec = parameters.checkpoints
                         [(self.checkpoint_idx + 1) % parameters.checkpoints.len()];
                     range = parameters.checkpoints
                         [(self.checkpoint_idx + 1) % parameters.checkpoints.len()]
                         - self.pos;
+                    thrust = (self.orientation.inner_product(range.normalized()).powi(4) * 16.0)
+                        .tanh()
+                        * MAX_THRUST;
                 }
-                Role::Attacker => (),
             }
+            Role::Attacker => (),
         }
-        let thrust =
-            (self.orientation.inner_product(range.normalized()).max(0.0) * 6.0).tanh() * MAX_THRUST;
         let action = if parameters
             .opponents
             .iter()
