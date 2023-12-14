@@ -227,7 +227,7 @@ impl Pod {
                 }
             }
         };
-        let mut range = nav_target - self.pos;
+        let range = nav_target - self.pos;
         let rotation_vec = range.outer_product(rel_vel) / range.inner_product(range);
         let acc_norm = Vec2::new(rel_vel.y * rotation_vec, -rel_vel.x * rotation_vec);
         let mut steer_vec = self.pos
@@ -238,17 +238,23 @@ impl Pod {
                 acc_norm.normalized() * MAX_THRUST
             };
 
-        let mut thrust =
-            (self.orientation.inner_product(range.normalized()).powi(4) * 16.0).tanh() * MAX_THRUST;
+        let mut thrust = (self
+            .orientation
+            .inner_product((steer_vec - self.pos).normalized())
+            .powi(4)
+            * 16.0)
+            .tanh()
+            * MAX_THRUST;
         match self.role {
             Role::Racer => {
                 if (nav_target - self.pos).norm() / self.vel.norm() < FUTURE_TIME {
                     steer_vec = parameters.checkpoints
                         [(self.checkpoint_idx + 1) % parameters.checkpoints.len()];
-                    range = parameters.checkpoints
-                        [(self.checkpoint_idx + 1) % parameters.checkpoints.len()]
-                        - self.pos;
-                    thrust = (self.orientation.inner_product(range.normalized()).powi(4) * 16.0)
+                    thrust = (self
+                        .orientation
+                        .inner_product((steer_vec - self.pos).normalized())
+                        .powi(4)
+                        * 16.0)
                         .tanh()
                         * MAX_THRUST;
                 }
