@@ -4,10 +4,11 @@ use std::{
     ops::{Add, Div, Mul, Neg, Sub},
 };
 
-const MAX_THRUST: f32 = 100.0;
+const MAX_ACCELERAION: f32 = 100.0;
 const POD_RADIUS: f32 = 400.0;
 const OPPONENTS: usize = 2;
-const FUTURE_TIME: f32 = 3.0;
+const FUTURE_TIME: f32 = 4.0;
+const DRAG_COEF: f32 = 0.85;
 
 macro_rules! parse_input {
     ($x:expr, $t:ident) => {
@@ -120,6 +121,7 @@ impl RaceParameters {
 struct Pod {
     pos: Vec2,
     vel: Vec2,
+    accel: f32,
     orientation: Vec2,
     checkpoint_idx: usize,
     lap: u8,
@@ -134,7 +136,7 @@ enum Role {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Action {
-    Thrust(f32),
+    Accelerate(f32),
     Boost,
     Shield,
 }
@@ -144,7 +146,7 @@ impl fmt::Display for Action {
         match self {
             Action::Boost => write!(f, "BOOST"),
             Action::Shield => write!(f, "SHIELD"),
-            Action::Thrust(thrust) => write!(f, "{:.0}", thrust.round()),
+            Action::Accelerate(accel) => write!(f, "{:.0}", accel.round()),
         }
     }
 }
@@ -162,6 +164,7 @@ impl Pod {
         Self {
             pos: Vec2::new(x, y),
             vel: Vec2::new(vx, vy),
+            accel: MAX_ACCELERAION,
             orientation: Vec2::new(1.0, 0.0).rotate_deg(orient_angle),
             checkpoint_idx,
             lap: 0,
@@ -197,7 +200,7 @@ impl Pod {
         self.checkpoint_idx = checkpoint_idx;
     }
 
-    fn navigate(&self, parameters: &RaceParameters) -> (Vec2, Action) {
+    fn navigate(&mut self, parameters: &RaceParameters) -> (Vec2, Action) {
         let nav_target;
         let rel_vel;
         match self.role {
@@ -205,7 +208,7 @@ impl Pod {
                 let current_cp = parameters.checkpoints[self.checkpoint_idx];
                 let next_cp = parameters.checkpoints
                     [(self.checkpoint_idx + 1) % parameters.checkpoints.len()];
-                nav_target = current_cp + (next_cp - current_cp).normalized() * (POD_RADIUS / 2.0);
+                nav_target = current_cp + (next_cp - current_cp).normalized() * POD_RADIUS;
                 rel_vel = -self.vel;
             }
             Role::Attacker => {
@@ -230,37 +233,42 @@ impl Pod {
         let range = nav_target - self.pos;
         let rotation_vec = range.outer_product(rel_vel) / range.inner_product(range);
         let acc_norm = Vec2::new(rel_vel.y * rotation_vec, -rel_vel.x * rotation_vec);
+
         let mut steer_vec = self.pos
-            + if acc_norm.norm() < MAX_THRUST {
-                range.normalized() * (MAX_THRUST.powi(2) - acc_norm.inner_product(acc_norm)).sqrt()
+            + if acc_norm.norm() < MAX_ACCELERAION {
+                range.normalized()
+                    * (MAX_ACCELERAION.powi(2) - acc_norm.inner_product(acc_norm)).sqrt()
                     + acc_norm
             } else {
-                acc_norm.normalized() * MAX_THRUST
+                acc_norm.normalized() * MAX_ACCELERAION
             };
 
-        let mut thrust = (self
-            .orientation
-            .inner_product((steer_vec - self.pos).normalized())
-            .powi(4)
-            * 16.0)
-            .tanh()
-            * MAX_THRUST;
-        match self.role {
+        let accel = match self.role {
             Role::Racer => {
-                if (nav_target - self.pos).norm() / self.vel.norm() < FUTURE_TIME {
+                if self.flight_time(range.norm()) < FUTURE_TIME {
                     steer_vec = parameters.checkpoints
                         [(self.checkpoint_idx + 1) % parameters.checkpoints.len()];
-                    thrust = (self
-                        .orientation
-                        .inner_product((steer_vec - self.pos).normalized())
-                        .powi(4)
-                        * 16.0)
-                        .tanh()
-                        * MAX_THRUST;
                 }
+                (self
+                    .orientation
+                    .inner_product((steer_vec - self.pos).normalized())
+                    .powi(4)
+                    * 16.0)
+                    .tanh()
+                    * MAX_ACCELERAION
             }
-            Role::Attacker => (),
-        }
+            Role::Attacker => {
+                (self
+                    .orientation
+                    .inner_product((steer_vec - self.pos).normalized())
+                    .powi(4)
+                    * 16.0)
+                    .tanh()
+                    * MAX_ACCELERAION
+            }
+        };
+        self.accel = accel;
+
         let action = if parameters
             .opponents
             .iter()
@@ -275,9 +283,18 @@ impl Pod {
             }) {
             Action::Shield
         } else {
-            Action::Thrust(thrust)
+            Action::Accelerate(accel)
         };
         (steer_vec, action)
+    }
+
+    /// Approximate time it will take to travel `distance` assuming current
+    /// thrust with no direction change.
+    fn flight_time(&self, distance: f32) -> f32 {
+        // This will never be smaller than 1.0.
+        let accel = self.accel.max(1.0);
+        distance * (1.0 - DRAG_COEF) / DRAG_COEF / accel - self.vel.norm() / accel
+            + DRAG_COEF / (1.0 - DRAG_COEF)
     }
 }
 
@@ -323,7 +340,7 @@ fn main() {
         "{:.0} {:.0} {}",
         parameters.checkpoints[racer.checkpoint_idx].x,
         parameters.checkpoints[racer.checkpoint_idx].y,
-        Action::Thrust(100.0)
+        Action::Accelerate(100.0)
     );
     loop {
         update_pod(&mut racer);
